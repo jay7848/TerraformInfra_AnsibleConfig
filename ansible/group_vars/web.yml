@@ -1,0 +1,3 @@
+---
+nginx_server_name: "_"
+backend_port: 5000

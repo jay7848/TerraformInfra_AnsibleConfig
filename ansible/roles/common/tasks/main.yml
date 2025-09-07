@@ -1,0 +1,62 @@
+---
+- name: Update apt cache
+  apt: update_cache=yes cache_valid_time=3600
+  become: yes
+
+- name: Upgrade minimal packages
+  apt: upgrade=safe
+  become: yes
+
+- name: Ensure basic tools
+  apt:
+    name: [git, curl, ufw]
+    state: present
+  become: yes
+
+- name: Disable root SSH login and password auth
+  lineinfile:
+    path: /etc/ssh/sshd_config
+    regexp: "{{ item.regexp }}"
+    line: "{{ item.line }}"
+    state: present
+    backrefs: yes
+  loop:
+    - { regexp: '^#?PasswordAuthentication\s+.*', line: 'PasswordAuthentication no' }
+    - { regexp: '^#?PermitRootLogin\s+.*',      line: 'PermitRootLogin no' }
+  notify: Restart SSH
+  become: yes
+
+- name: UFW allow SSH on 22
+  ufw: rule=allow port=22 proto=tcp
+  become: yes
+
+- name: Ensure UFW enabled
+  ufw: state=enabled
+  become: yes
+
+- name: Create project root
+  file:
+    path: "{{ project_root }}"
+    state: directory
+    owner: ubuntu
+    group: ubuntu
+    mode: "0755"
+  become: yes
+
+- name: Git install confirmed (idempotent noop)
+  command: git --version
+  register: git_ver
+  changed_when: false
+
+- name: Print git version
+  debug: var=git_ver.stdout
+
+- name: Ensure build deps (web only)
+  when: "'web' in group_names"
+  apt:
+    name: [build-essential]
+    state: present
+  become: yes
+
+- name: Handlers placeholder
+  meta: flush_handlers

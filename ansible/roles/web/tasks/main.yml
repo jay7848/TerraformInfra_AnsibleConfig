@@ -1,0 +1,116 @@
+---
+# Install Node.js 18 + Nginx
+- name: Add NodeSource GPG key (Node 18)
+  ansible.builtin.get_url:
+    url: https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key
+    dest: /etc/apt/keyrings/nodesource.gpg
+    mode: "0644"
+  become: yes
+
+- name: Add NodeSource repo (Node 18)
+  ansible.builtin.apt_repository:
+    repo: "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_18.x nodistro main"
+    filename: nodesource-node18
+    state: present
+  become: yes
+
+- name: Install Node.js and Nginx
+  ansible.builtin.apt:
+    name:
+      - nodejs
+      - nginx
+    state: present
+    update_cache: yes
+  become: yes
+
+- name: Install PM2 globally
+  community.general.npm:
+    name: pm2
+    global: yes
+    state: present
+  become: yes
+
+- name: Allow HTTP in UFW
+  community.general.ufw:
+    rule: allow
+    port: "80"
+    proto: tcp
+  become: yes
+
+- name: Clone/update TravelMemory repo
+  ansible.builtin.git:
+    repo: "{{ repo_url }}"
+    dest: "{{ project_root }}"
+    version: HEAD
+    update: yes
+    force: yes
+
+# Install backend deps
+- name: Install backend dependencies
+  community.general.npm:
+    path: "{{ project_root }}/{{ backend_dir }}"
+    production: false
+  environment:
+    NODE_OPTIONS: "--max-old-space-size=1024"
+
+# Build frontend
+- name: Install frontend dependencies
+  community.general.npm:
+    path: "{{ project_root }}/{{ frontend_dir }}"
+    production: false
+
+- name: Build frontend
+  ansible.builtin.shell: "npm run build"
+  args:
+    chdir: "{{ project_root }}/{{ frontend_dir }}"
+
+# Nginx config
+- name: Write nginx config
+  ansible.builtin.template:
+    src: nginx.conf.j2
+    dest: /etc/nginx/sites-available/travelmemory.conf
+  become: yes
+
+- name: Enable site and disable default
+  ansible.builtin.file:
+    src: /etc/nginx/sites-available/travelmemory.conf
+    dest: /etc/nginx/sites-enabled/travelmemory.conf
+    state: link
+  become: yes
+
+- name: Remove default site if exists
+  ansible.builtin.file:
+    path: /etc/nginx/sites-enabled/default
+    state: absent
+  become: yes
+
+- name: Test and reload nginx
+  ansible.builtin.shell: "nginx -t"
+  register: nginx_test
+  changed_when: false
+  become: yes
+
+- name: Reload nginx
+  ansible.builtin.service:
+    name: nginx
+    state: reloaded
+  when: nginx_test.rc == 0
+  become: yes
+
+# PM2 app
+- name: Render PM2 ecosystem file
+  ansible.builtin.template:
+    src: ecosystem.config.js.j2
+    dest: "{{ project_root }}/ecosystem.config.js"
+    owner: ubuntu
+    group: ubuntu
+    mode: "0644"
+
+- name: Start API with PM2
+  ansible.builtin.shell: "pm2 start {{ project_root }}/ecosystem.config.js && pm2 save"
+  args:
+    creates: "/home/ubuntu/.pm2/dump.pm2"
+
+- name: Enable PM2 startup on boot
+  ansible.builtin.shell: "pm2 startup systemd -u ubuntu --hp /home/ubuntu"
+  become: yes

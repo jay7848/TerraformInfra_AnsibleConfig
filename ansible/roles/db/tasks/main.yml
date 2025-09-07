@@ -1,0 +1,74 @@
+---
+- name: Add MongoDB apt key
+  ansible.builtin.apt_key:
+    url: https://pgp.mongodb.com/server-7.0.asc
+    state: present
+  become: yes
+
+- name: Add MongoDB repo
+  ansible.builtin.apt_repository:
+    repo: "deb [ arch=amd64,arm64 ] https://repo.mongodb.org/apt/ubuntu jammy/mongodb-org/7.0 multiverse"
+    state: present
+  become: yes
+
+- name: Install MongoDB packages
+  ansible.builtin.apt:
+    name: [mongodb-org]
+    state: present
+    update_cache: yes
+  become: yes
+
+- name: Configure mongod bindIp to private address
+  ansible.builtin.replace:
+    path: /etc/mongod.conf
+    regexp: '^\s*bindIp:\s*.*$'
+    replace: "  bindIp: 127.0.0.1,{{ mongo_bind_ip }}"
+  become: yes
+
+- name: Enable and start mongod
+  ansible.builtin.systemd:
+    name: mongod
+    enabled: true
+    state: started
+  become: yes
+
+# Wait for mongod to be listening
+- name: Wait for Mongo on 27017
+  ansible.builtin.wait_for:
+    host: "{{ mongo_bind_ip }}"
+    port: 27017
+    timeout: 60
+
+# Create admin/app users (idempotent via mongosh checks)
+- name: Create admin user
+  ansible.builtin.shell: |
+    mongosh --quiet admin --eval '
+      try {
+        db.getUser("{{ mongo_admin_user }}") || db.createUser({user:"{{ mongo_admin_user }}",pwd:"{{ mongo_admin_pass }}",roles:["root"]});
+      } catch(e){ quit(0); }'
+
+- name: Enable authorization (security.authorization)
+  ansible.builtin.blockinfile:
+    path: /etc/mongod.conf
+    marker: "# {mark} Ansible managed - security"
+    block: |
+      security:
+        authorization: enabled
+  become: yes
+
+- name: Restart mongod to enforce auth
+  ansible.builtin.systemd:
+    name: mongod
+    state: restarted
+  become: yes
+
+- name: Create application DB user
+  ansible.builtin.shell: |
+    mongosh --quiet admin -u "{{ mongo_admin_user }}" -p "{{ mongo_admin_pass }}" --authenticationDatabase admin --eval '
+      db = db.getSiblingDB("{{ mongo_db_name }}");
+      try {
+        db.getUser("{{ mongo_app_user }}") || db.createUser({
+          user:"{{ mongo_app_user }}", pwd:"{{ mongo_app_pass }}",
+          roles:[{role:"readWrite", db:"{{ mongo_db_name }}"}]
+        });
+      } catch(e){ quit(0); }'

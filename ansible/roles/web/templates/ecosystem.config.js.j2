@@ -1,0 +1,13 @@
+module.exports = {
+  apps : [{
+    name: "travelmemory-api",
+    cwd: "{{ project_root }}/{{ backend_dir }}",
+    script: "npm",
+    args: "start",
+    env: {
+      PORT: "{{ backend_port }}",
+      NODE_ENV: "production",
+      MONGO_URI: "mongodb://{{ mongo_app_user }}:{{ mongo_app_pass }}@{{ hostvars[groups['db'][0]].ansible_default_ipv4.address }}:27017/{{ mongo_db_name }}?authSource=admin"
+    }
+  }]
+}
